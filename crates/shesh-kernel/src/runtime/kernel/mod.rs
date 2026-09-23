@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use chrono::Utc;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 
 use crate::{
     error::{KernelError, TaskError},
@@ -15,8 +15,13 @@ use crate::{
     state::{TaskRecord, TaskState},
     storage::{EventStore, TaskProjection},
     task::{TaskId, TaskInput, TaskRequest},
-    tools::broker::ToolBroker,
+    tools::{broker::ToolBroker, executor::ToolRequest},
 };
+
+struct PendingConfirmation {
+    request: ToolRequest,
+    output: String,
+}
 
 /// The SheshAOS kernel — owns task lifecycle, policy, and state.
 pub struct Kernel {
@@ -25,6 +30,7 @@ pub struct Kernel {
     policy: Arc<RwLock<PolicyEngine>>,
     provider_registry: Arc<ProviderRegistry>,
     tool_broker: Arc<ToolBroker>,
+    pending_confirmations: Mutex<std::collections::HashMap<TaskId, PendingConfirmation>>,
     max_tool_output_size: usize,
 }
 
@@ -43,6 +49,7 @@ impl Kernel {
             policy,
             provider_registry,
             tool_broker,
+            pending_confirmations: Mutex::new(std::collections::HashMap::new()),
             max_tool_output_size,
         };
         Ok(kernel)
@@ -412,6 +419,10 @@ impl Kernel {
                     )
                     .await?;
                     requires_confirmation = true;
+                    self.pending_confirmations.lock().await.insert(
+                        *task_id,
+                        PendingConfirmation { request: tool_req, output: final_output.clone() },
+                    );
                 }
                 Err(e) => {
                     self.emit_tool_result(
@@ -464,6 +475,53 @@ impl Kernel {
             completed_at: Utc::now(),
             requires_confirmation: false,
         })
+    }
+
+    /// Execute the pending tool request for a task after explicit approval.
+    pub async fn confirm_task(
+        &self,
+        task_id: &TaskId,
+    ) -> Result<crate::task::TaskOutcome, KernelError> {
+        let pending = self.pending_confirmations.lock().await.remove(task_id).ok_or_else(|| {
+            KernelError::Task(TaskError::InvalidTransition {
+                from: "No pending confirmation".to_string(),
+                to: "Executing".to_string(),
+            })
+        })?;
+        let state = self.task_state(task_id).await?;
+        if !matches!(state, TaskState::AwaitingConfirmation | TaskState::Blocked) {
+            return Err(KernelError::Task(TaskError::InvalidTransition {
+                from: state.to_string(),
+                to: TaskState::Executing.to_string(),
+            }));
+        }
+        self.transition_task(task_id, TaskState::Executing).await?;
+
+        match self.tool_broker.execute_confirmed(&pending.request).await {
+            Ok(result) => {
+                self.emit_tool_result(
+                    *task_id,
+                    EventKind::ToolCompleted,
+                    &pending.request.tool_name,
+                    result.success,
+                    &result.output,
+                )
+                .await?;
+                self.transition_task(task_id, TaskState::Completed).await?;
+                Ok(crate::task::TaskOutcome {
+                    task_id: *task_id,
+                    success: result.success,
+                    output: Some(pending.output),
+                    error: if result.success { None } else { Some(result.output) },
+                    completed_at: Utc::now(),
+                    requires_confirmation: false,
+                })
+            }
+            Err(error) => {
+                self.emit_failure_and_return(*task_id, error.to_string(), Some(pending.output))
+                    .await
+            }
+        }
     }
 
     // Helper: emit an event

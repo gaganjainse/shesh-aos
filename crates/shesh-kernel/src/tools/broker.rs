@@ -72,6 +72,39 @@ impl ToolBroker {
         }
     }
 
+    /// Execute a request after an explicit approval.
+    ///
+    /// The policy is evaluated again and the executor is reached only when
+    /// the policy still requires confirmation. This makes approval a separate
+    /// governed path rather than a direct executor bypass.
+    pub async fn execute_confirmed(&self, request: &ToolRequest) -> Result<ToolResult, ToolError> {
+        let action = request
+            .arguments
+            .get("action")
+            .and_then(|value| value.as_str())
+            .map(|action| format!("{}.{}", request.tool_name, action))
+            .unwrap_or_else(|| format!("{}.execute", request.tool_name));
+
+        match self.policy.evaluate(&action) {
+            PolicyDecision::RequireConfirmation(_) => {
+                let executor = self
+                    .executors
+                    .get(&request.tool_name)
+                    .ok_or_else(|| ToolError::NotFound { name: request.tool_name.clone() })?;
+                info!(tool = %request.tool_name, action = %action, "Executing confirmed tool request");
+                executor.execute(request).await
+            }
+            PolicyDecision::Allow => Err(ToolError::ExecutionFailed {
+                name: request.tool_name.clone(),
+                reason: "Tool does not require confirmation".to_string(),
+            }),
+            PolicyDecision::Deny(reason) => Err(ToolError::ExecutionFailed {
+                name: request.tool_name.clone(),
+                reason: format!("Tool denied: {}", reason),
+            }),
+        }
+    }
+
     /// List available tools.
     pub fn available_tools(&self) -> Vec<String> {
         self.executors.keys().cloned().collect()
@@ -168,6 +201,26 @@ mod tests {
             BrokerResult::RequiresConfirmation(reason) => assert!(!reason.is_empty()),
             _ => panic!("Expected RequiresConfirmation"),
         }
+    }
+
+    #[tokio::test]
+    async fn confirmed_request_executes_only_after_confirmation() {
+        let rule = PolicyRule {
+            name: "confirm-dummy".to_string(),
+            action_pattern: "dummy.execute".to_string(),
+            decision: "require_confirmation".to_string(),
+            trust_tier: 0,
+            description: None,
+        };
+        let mut broker = ToolBroker::new(Arc::new(PolicyEngine::new(vec![rule], TrustTier::Basic)));
+        broker.register(Arc::new(DummyTool));
+        let request = ToolRequest { tool_name: "dummy".to_string(), arguments: json!({}) };
+
+        assert!(matches!(
+            broker.execute(&request).await.unwrap(),
+            BrokerResult::RequiresConfirmation(_)
+        ));
+        assert_eq!(broker.execute_confirmed(&request).await.unwrap().output, "ok");
     }
 
     #[tokio::test]

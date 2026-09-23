@@ -4,37 +4,30 @@
 * @sheshaaos-maintainers
 
 # Core kernel
-crates/sheshaaos-kernel/src/runtime/ @sheshaaos-maintainers
-crates/sheshaaos-kernel/src/policy.rs @sheshaaos-maintainers
-crates/sheshaaos-kernel/src/storage/ @sheshaaos-maintainers
+crates/shesh-kernel/src/runtime/ @sheshaaos-maintainers
+crates/shesh-kernel/src/policy.rs @sheshaaos-maintainers
+crates/shesh-kernel/src/storage/ @sheshaaos-maintainers
 
 # Wave object model
-crates/sheshaaos-waveobj/src/store.rs @sheshaaos-maintainers
-crates/sheshaaos-waveobj/src/types.rs @sheshaaos-maintainers
+crates/shesh-waveobj/src/store.rs @sheshaaos-maintainers
+crates/shesh-waveobj/src/types.rs @sheshaaos-maintainers
 
 # Pub/Sub
-crates/sheshaaos-wps/src/broker.rs @sheshaaos-maintainers
+crates/shesh-wps/src/broker.rs @sheshaaos-maintainers
 
 # Block controller
-crates/sheshaaos-blockctl/src/ @sheshaaos-maintainers
-
-# Terminal / PTY
-crates/sheshaaos-terminal/src/ @sheshaaos-maintainers
+crates/shesh-blockctl/src/ @sheshaaos-maintainers
 
 # AI providers
-crates/sheshaaos-ai/src/ @sheshaaos-maintainers
-
-# GUI / TUI
-crates/sheshaaos-gui/src/ @sheshaaos-maintainers
-crates/sheshaaos-tui/src/ @sheshaaos-maintainers
+crates/shesh-ai/src/ @sheshaaos-maintainers
 
 # Remote / RPC
-crates/sheshaaos-remote/src/ @sheshaaos-maintainers
-crates/sheshaaos-rpc/src/ @sheshaaos-maintainers
+crates/shesh-remote/src/ @sheshaaos-maintainers
+crates/shesh-rpc/src/ @sheshaaos-maintainers
 
 # Vault / Config
-crates/sheshaaos-vault/src/ @sheshaaos-maintainers
-crates/sheshaaos-wconfig/src/ @sheshaaos-maintainers
+crates/shesh-vault/src/ @sheshaaos-maintainers
+crates/shesh-wconfig/src/ @sheshaaos-maintainers
 
 # CI / Docs
 .github/ @sheshaaos-maintainers

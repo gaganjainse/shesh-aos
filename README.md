@@ -36,14 +36,11 @@ action, and an event-sourced store keeps an append-only, hash-verifiable record
 of every state change. It ships with a stock **Wave Terminal** frontend
 (ADR-0016), a full CLI, and a JSON-RPC control socket.
 
-| Metric | Value |
+| Attribute | Value |
 | --- | --- |
-|  **Language** | Rust (edition 2024) |
-|  **Crates** | 9 workspace crates + `shesh` CLI |
-|  **Tests** | 877 passing |
-|  **Lints** | 0 clippy warnings (`-D warnings`) |
-|  **License** | GPL-3.0-or-later |
-|  **Status** | Production-ready flagship (personal project) |
+| **Language** | Rust (edition 2021) |
+| **License** | GPL-3.0-or-later |
+| **Target** | CachyOS/Arch · Linux-native · Rust |
 
 ## Why SheshAOS
 
@@ -247,7 +244,8 @@ cargo bench --workspace      # 6 criterion benches
 
 ## Status
 
-CI green. Security: [SECURITY.md](SECURITY.md). Compiled reading:
+Development and security guidance live in [CONTRIBUTING.md](CONTRIBUTING.md)
+and [SECURITY.md](SECURITY.md). Fleet-wide documentation lives in
 [shesh-docs](https://github.com/gaganjainse/shesh-docs).
 
 ## License
@@ -256,4 +254,4 @@ GPL-3.0-or-later — see [LICENSE](LICENSE).
 
 ---
 
-Built with  by [gaganjainse](https://github.com/gaganjainse).
+Built by [gaganjainse](https://github.com/gaganjainse).

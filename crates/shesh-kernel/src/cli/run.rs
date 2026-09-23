@@ -1,12 +1,15 @@
 //! `shesh run` — Submit a task for execution.
 
-use std::sync::Arc;
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use tokio::sync::RwLock;
 use tracing::info;
 
 use crate::{
-    config::AppConfig,
+    config::{AppConfig, PolicyConfig},
     error::KernelError,
     model::{openai_compat::OpenAiCompatProvider, registry::ProviderRegistry},
     policy::{PolicyEngine, PolicyRule, TrustTier},
@@ -37,13 +40,7 @@ pub fn execute(
         let store = Arc::new(SqliteEventStore::open(events_dir).await?);
 
         // 2. Initialize Policy Engine
-        let rules = vec![PolicyRule {
-            name: "allow-all".to_string(),
-            action_pattern: "*".to_string(),
-            decision: "allow".to_string(),
-            trust_tier: 0,
-            description: None,
-        }];
+        let rules = policy_rules(&config.policy, yes);
 
         let trust_tier = if yes { TrustTier::Autonomous } else { TrustTier::Basic };
         let policy = PolicyEngine::new(rules, trust_tier);
@@ -60,7 +57,7 @@ pub fn execute(
 
         // 4. Initialize Tool Broker
         let mut broker = ToolBroker::new(policy_arc);
-        let allowed_paths = vec![data_dir.clone()];
+        let allowed_paths = filesystem_allowed_paths(&config, &data_dir);
         broker.register(Arc::new(FilesystemTool::new(
             allowed_paths,
             config.tools.filesystem.denied_patterns.clone(),
@@ -120,4 +117,137 @@ pub fn execute(
 
         Ok::<(), KernelError>(())
     })
+}
+
+/// Build the policy used by `shesh run` from the user's configuration.
+///
+/// Read-only operations are always allowed. Mutating operations require
+/// confirmation unless the corresponding configuration setting disables it or
+/// the user explicitly supplied `--yes` for this invocation. Actions not
+/// listed here remain denied by the policy engine's deny-by-default fallback.
+fn policy_rules(config: &PolicyConfig, yes: bool) -> Vec<PolicyRule> {
+    let mut rules = vec![
+        rule("allow-filesystem-read", "filesystem.read_*", "allow"),
+        rule("allow-filesystem-list", "filesystem.list_*", "allow"),
+        rule("allow-git-status", "git.status", "allow"),
+        rule("allow-git-diff", "git.diff", "allow"),
+        rule("allow-git-log", "git.log", "allow"),
+    ];
+
+    rules.push(rule(
+        "filesystem-write",
+        "filesystem.write_*",
+        decision_for(config.confirm_writes, yes),
+    ));
+    rules.push(rule(
+        "filesystem-delete",
+        "filesystem.delete_*",
+        decision_for(config.confirm_destructive, yes),
+    ));
+    rules.push(rule("git-add", "git.add", decision_for(config.confirm_destructive, yes)));
+    rules.push(rule("git-commit", "git.commit", decision_for(config.confirm_git_commits, yes)));
+    rules.push(rule(
+        "terminal-execute",
+        "terminal.execute",
+        decision_for(config.confirm_terminal, yes),
+    ));
+    rules
+}
+
+fn decision_for(requires_confirmation: bool, yes: bool) -> &'static str {
+    if requires_confirmation && !yes {
+        "require_confirmation"
+    } else {
+        "allow"
+    }
+}
+
+fn rule(name: &str, action_pattern: &str, decision: &str) -> PolicyRule {
+    PolicyRule {
+        name: name.to_string(),
+        action_pattern: action_pattern.to_string(),
+        decision: decision.to_string(),
+        trust_tier: 0,
+        description: None,
+    }
+}
+
+/// Resolve filesystem roots once at startup so the tool receives absolute,
+/// configuration-derived paths instead of an implicit data-directory-only scope.
+fn filesystem_allowed_paths(config: &AppConfig, data_dir: &Path) -> Vec<PathBuf> {
+    let configured = &config.tools.filesystem.allowed_paths;
+    if configured.is_empty() {
+        return vec![data_dir.to_path_buf()];
+    }
+
+    let cwd = std::env::current_dir().unwrap_or_else(|_| data_dir.to_path_buf());
+    configured
+        .iter()
+        .map(|path| match path.strip_prefix("~/") {
+            Some(relative) => std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| cwd.clone())
+                .join(relative),
+            None => {
+                let path = PathBuf::from(path);
+                if path.is_absolute() {
+                    path
+                } else {
+                    cwd.join(path)
+                }
+            }
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn confirmation_config() -> PolicyConfig {
+        PolicyConfig {
+            confirm_destructive: true,
+            confirm_writes: true,
+            confirm_git_commits: true,
+            confirm_terminal: true,
+            dedup_window_secs: 5,
+        }
+    }
+
+    #[test]
+    fn default_run_policy_allows_reads_and_confirms_mutations() {
+        let policy =
+            PolicyEngine::new(policy_rules(&confirmation_config(), false), TrustTier::Basic);
+
+        assert!(policy.evaluate("filesystem.read_file").is_allowed());
+        assert!(policy.evaluate("git.status").is_allowed());
+        assert!(policy.evaluate("filesystem.write_file").requires_confirmation());
+        assert!(policy.evaluate("filesystem.delete_file").requires_confirmation());
+        assert!(policy.evaluate("git.add").requires_confirmation());
+        assert!(policy.evaluate("git.commit").requires_confirmation());
+        assert!(policy.evaluate("terminal.execute").requires_confirmation());
+        assert!(policy.evaluate("remote.execute").is_denied());
+    }
+
+    #[test]
+    fn yes_flag_allows_only_known_mutating_actions() {
+        let policy =
+            PolicyEngine::new(policy_rules(&confirmation_config(), true), TrustTier::Autonomous);
+
+        assert!(policy.evaluate("filesystem.write_file").is_allowed());
+        assert!(policy.evaluate("filesystem.delete_file").is_allowed());
+        assert!(policy.evaluate("git.commit").is_allowed());
+        assert!(policy.evaluate("terminal.execute").is_allowed());
+        assert!(policy.evaluate("unknown.action").is_denied());
+    }
+
+    #[test]
+    fn filesystem_roots_default_to_data_directory_when_unconfigured() {
+        let mut config = AppConfig::parse_toml(include_str!("../../../../configs/default.toml"))
+            .expect("default configuration parses");
+        config.tools.filesystem.allowed_paths.clear();
+        let data_dir = PathBuf::from("/tmp/shesh-data");
+
+        assert_eq!(filesystem_allowed_paths(&config, &data_dir), vec![data_dir]);
+    }
 }
