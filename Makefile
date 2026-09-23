@@ -13,6 +13,8 @@ help:
 	@echo "  make all      - Run fmt, lint, test, build"
 
 check:
+	$(MAKE) lint
+	$(MAKE) test
 	cargo check --workspace
 
 test:
@@ -20,7 +22,7 @@ test:
 
 lint:
 	cargo fmt --check
-	cargo clippy --all-targets -- -D warnings
+	cargo clippy --workspace --all-targets -- -D warnings
 
 fmt:
 	cargo fmt
@@ -35,5 +37,5 @@ clean:
 	cargo clean
 	rm -rf target/
 
-all: fmt lint test build
+all: check build
 	@echo "==> All checks passed!"

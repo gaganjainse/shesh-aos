@@ -10,7 +10,26 @@ use crate::{
         types::{CompletionRequest, CompletionResponse},
     },
     policy::TrustTier,
+    tools::executor::{ToolExecutor, ToolRequest, ToolResult},
 };
+
+struct ConfirmationTool;
+
+#[async_trait]
+impl ToolExecutor for ConfirmationTool {
+    fn name(&self) -> &str {
+        "dummy"
+    }
+    fn description(&self) -> &str {
+        "confirmation test tool"
+    }
+    fn is_destructive(&self) -> bool {
+        true
+    }
+    async fn execute(&self, _request: &ToolRequest) -> Result<ToolResult, crate::error::ToolError> {
+        Ok(ToolResult { success: true, output: "executed".to_string(), data: None })
+    }
+}
 
 struct MockProvider {
     role: crate::state::ModelRole,
@@ -118,6 +137,55 @@ async fn test_submit_task_denied() {
 
     let result = kernel.submit_task(TaskInput::Text("test".into())).await;
     assert!(matches!(result, Err(KernelError::Policy(_))));
+}
+
+#[tokio::test]
+async fn confirmation_executes_the_pending_tool_after_approval() {
+    let store = Arc::new(MockEventStore::new());
+    let policy = PolicyEngine::new(
+        vec![
+            crate::policy::PolicyRule {
+                name: "allow-task".into(),
+                action_pattern: "task.create".into(),
+                decision: "allow".into(),
+                trust_tier: 0,
+                description: None,
+            },
+            crate::policy::PolicyRule {
+                name: "confirm-tool".into(),
+                action_pattern: "dummy.execute".into(),
+                decision: "require_confirmation".into(),
+                trust_tier: 0,
+                description: None,
+            },
+        ],
+        TrustTier::Basic,
+    );
+    let mut registry = ProviderRegistry::new();
+    registry.register(Box::new(MockProvider {
+        role: crate::state::ModelRole::Planner,
+        content: "TOOL: dummy {}".into(),
+    }));
+    let mut broker = ToolBroker::new(Arc::new(policy.clone()));
+    broker.register(Arc::new(ConfirmationTool));
+    let kernel = Kernel::new(
+        store,
+        Arc::new(RwLock::new(policy)),
+        Arc::new(registry),
+        Arc::new(broker),
+        1_048_576,
+    )
+    .await
+    .unwrap();
+
+    let task_id = kernel.submit_task(TaskInput::Text("hello".into())).await.unwrap();
+    let pending = kernel.execute_task(&task_id).await.unwrap();
+    assert!(pending.requires_confirmation, "unexpected outcome: {pending:?}");
+    assert_eq!(kernel.task_state(&task_id).await.unwrap(), TaskState::AwaitingConfirmation);
+
+    let completed = kernel.confirm_task(&task_id).await.unwrap();
+    assert!(completed.success);
+    assert_eq!(kernel.task_state(&task_id).await.unwrap(), TaskState::Completed);
 }
 
 #[tokio::test]
