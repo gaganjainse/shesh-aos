@@ -5,7 +5,7 @@ edition = "2021"
 license.workspace = true
 
 [dependencies]
-russh = "0.62.6"  # >=0.60.3: RUSTSEC-2026-0153/0154 (CVE-2026-46673)
+russh = "0.64.1"  # >=0.60.3: RUSTSEC-2026-0153/0154 (CVE-2026-46673)
 # russh-keys merged into russh as russh::keys in the 0.4x line.
 tokio = { workspace = true }
 async-trait = { workspace = true }
